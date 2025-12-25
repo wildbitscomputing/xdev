@@ -232,6 +232,15 @@ pcopy
 		lda #>event_type
 		sta kernel_args_events+1
 
+		; clear the event queue
+		php
+		sei  ; disable interrupts to keep events from queueing?
+]loop
+        jsr kernel_Yield
+        jsr kernel_NextEvent
+        bcc ]loop
+		; end clear event queue
+
 		lda #<filename
 		ldx #>filename
 		jsr fcreate
@@ -278,6 +287,7 @@ pcopy
 		jsr fwrite
 
 		jsr fclose
+		plp 	   	; restore interrupt state
 
 		jsr TermCR
 		jsr TermCR

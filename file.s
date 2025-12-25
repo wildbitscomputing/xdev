@@ -13,6 +13,7 @@ file_bytes_wrote ds 0
 file_bytes_read ds 3
 
 file_to_read ds 1
+file_open_drive ds 1
 		dend
 
 file_buffer equ $200  ; $$TODO, remove this for writes
@@ -85,8 +86,8 @@ fcreate_open
 		pla
 		fin
 
-		cmp #kernel_event_file_CLOSED
-		beq :error
+		;cmp #kernel_event_file_CLOSED  ; skip this event
+		;beq :error
         cmp #kernel_event_file_NOT_FOUND
         beq :error
 		cmp #kernel_event_file_OPENED
