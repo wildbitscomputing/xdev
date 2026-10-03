@@ -1,10 +1,8 @@
 ;
-; Merlin32 pcopy program, for Jr
+; PCopy program, for Jr
 ;
-		mx %11
 
-; pretty much all the contiguous memory
-; about 447K 
+; Maximum transfer size: 447 KiB.
 MAX_LENGTH = $6FC00
 
 ;------------------------------------------------------------------------------
@@ -19,20 +17,20 @@ MAX_LENGTH = $6FC00
 xfer_data = $10000
 
 ; first thing is a c string with the name of the file
-; second thing is the length of the file (3) bytes
-; third thing is the zip crc32
+; second thing is the CRC32 (4 bytes, little-endian)
+; third thing is the file length (3 bytes, little-endian)
 ; followed by file data
 
 ; File uses $B0-$BF
 ; Term uses $C0-$CF
 ; Kernel uses $F0-FF
-; crc32 uses  $F2-FF
+; crc32 uses  $E0-E9
 
-		dum $2000
-filename ds 256
-crc32    ds 4
-len24    ds 3
-		dend
+		.virtual $2000
+filename .fill 256
+crc32    .fill 4
+len24    .fill 3
+		.endv
 
 ;
 
@@ -45,7 +43,7 @@ pcopy
 		ldx #>txt_look_for_data
 		jsr TermPUTS
 
-		ldy #^xfer_data
+		ldy #`xfer_data
 		lda #<xfer_data
 		ldx #>xfer_data
 		jsr TermPrintAXYH
@@ -53,17 +51,17 @@ pcopy
 
 		lda #<xfer_data
 		ldx #>xfer_data
-		ldy #^xfer_data
+		ldy #`xfer_data
 		jsr set_read_address
 
 		; Print out the filename
 		; copy the filename into our mapped space
 		ldx #0
-]name	jsr readbyte
+_name	jsr readbyte
 		sta filename,x
 		inx
 		cmp #0
-		bne ]name
+		bne _name
 
 		lda #<txt_filename
 		ldx #>txt_filename
@@ -82,11 +80,11 @@ pcopy
 		jsr TermPUTS
 
 		ldx #0
-]crc32  jsr readbyte
+_crc32  jsr readbyte
 		sta crc32,x
 		inx
 		cpx #4
-		bcc ]crc32
+		bcc _crc32
 
 		lda crc32+3
 		jsr TermPrintAH
@@ -106,11 +104,11 @@ pcopy
 		jsr TermPUTS
 
 		ldx #0
-]len	jsr readbyte
+_len	jsr readbyte
 		sta len24,x
 		inx
 		cpx #3
-		bcc ]len
+		bcc _len
 
 		lda len24
 		ldx len24+1
@@ -119,56 +117,52 @@ pcopy
 		jsr TermCR
 
 		lda len24+2
-		cmp #^MAX_LENGTH
-		bcc :length_good
-		bne :length_bad
+		cmp #`MAX_LENGTH
+		bcc _length_good
+		bne _length_bad
 		lda len24+1
 		cmp #>MAX_LENGTH
-		bcc :length_good
-		bne :length_bad
+		bcc _length_good
+		bne _length_bad
 		lda len24
 		cmp #<MAX_LENGTH
-		bcc :length_good
-		beq :length_good
-:length_bad
+		bcc _length_good
+		beq _length_good
+_length_bad
 
 		jsr TermCR
 		lda #<txt_bad_len
 		ldx #>txt_bad_len
 		jsr TermPUTS
-]bad_len bra ]bad_len
+_bad_len bra _bad_len
 
-:length_good
+_length_good
 
 ;--------------------------------------------------
 
-:start   = temp1
-:length  = temp2
-
+pcopy_data_start   = temp1
+pcopy_length  = temp2
 
 		; save data start for the write later, if we decide to write
 		jsr get_read_address
-		sta :start
-		stx :start+1
-		sty :start+2
+		sta pcopy_data_start
+		stx pcopy_data_start+1
+		sty pcopy_data_start+2
 
-; stuff the length in a temp, and setup length for crc
+; Save the length for CRC verification and writing.
 		lda len24
-		sta :length			; used for the read in
-;		sta crc_num
+		sta pcopy_length			; used for the read in
 		lda len24+1
-		sta :length+1
-;		sta crc_num+1
+		sta pcopy_length+1
 		lda len24+2 		; used for CRC status
-		sta :length+2
-;		sta crc_num+2
+		sta pcopy_length+2
 
 ; display crc
 		lda #<txt_calc32
-		ldx #>txt_calc32+1
+		ldx #>(txt_calc32+1)
 		jsr TermPUTS
 
-; Do a CRC, but do it in hunks so program doesn't seem broken
+; Calculate CRC in chunks, updating the progress display.
 		jsr fancy_crc
 
 ; Display the result CRC
@@ -185,36 +179,34 @@ pcopy
 		ldx #>txt_match
 		jsr TermPUTS
 
-		do 1
 		lda crc32
 		cmp crc
-		bne :no
+		bne _no
 		lda crc32+1
 		cmp crc+1
-		bne :no
+		bne _no
 		lda crc32+2
 		cmp crc+2
-		bne :no
+		bne _no
 		lda crc32+3
 		cmp crc+3
-		bne :no
-		fin
+		bne _no
 
 		lda #<txt_yes
 		ldx #>txt_yes
 		jsr TermPUTS
 		jsr TermCR
-		bra :save_that_file
-:no
+		bra _save_that_file
+_no
 		lda #<txt_no
 		ldx #>txt_no
 		jsr TermPUTS
 
 ; crc did not match
 		jsr mmu_lock
-]fuckno bra ]fuckno
+_crc_failed bra _crc_failed
 
-:save_that_file
+_save_that_file
 
 		lda #<txt_create
 		ldx #>txt_create
@@ -235,16 +227,16 @@ pcopy
 		; clear the event queue
 		php
 		sei  ; disable interrupts to keep events from queueing?
-]loop
+_loop
         jsr kernel_Yield
         jsr kernel_NextEvent
-        bcc ]loop
+        bcc _loop
 		; end clear event queue
 
 		lda #<filename
 		ldx #>filename
 		jsr fcreate
-		bcc :good
+		bcc _good
 
 		pha
 		lda #<txt_fail
@@ -255,35 +247,35 @@ pcopy
 		jsr TermPrintAH
 		jsr TermCR
 		jsr mmu_lock
-]failed bra ]failed
+_failed bra _failed
 
-:good
+_good
 		lda #<txt_write
 		ldx #>txt_write
 		jsr TermPUTS
 
-		lda :length
-		ldx :length+1
-		ldy :length+2
+		lda pcopy_length
+		ldx pcopy_length+1
+		ldy pcopy_length+2
 		jsr TermPrintAXYH
 		jsr TermCR
 
-		lda :start
-		ldx :start+1
-		ldy :start+2
+		lda pcopy_data_start
+		ldx pcopy_data_start+1
+		ldy pcopy_data_start+2
 		jsr set_read_address
 ; Where we reading from in memory
-		lda :start+2
+		lda pcopy_data_start+2
 		jsr TermPrintAH
-		lda :start+1
+		lda pcopy_data_start+1
 		jsr TermPrintAH
-		lda :start+0
+		lda pcopy_data_start+0
 		jsr TermPrintAH
 		jsr TermCR
 
-		lda :length
-		ldx :length+1
-		ldy :length+2
+		lda pcopy_length
+		ldx pcopy_length+1
+		ldy pcopy_length+2
 		jsr fwrite
 
 		jsr fclose
@@ -298,8 +290,8 @@ pcopy
 
 		jsr mmu_lock
 
-]done   bra ]done
-;$$TODO - return here
+_done   bra _done
+; Wait for reset after copying.
 
 ;-----------------------------------------------
 ;
@@ -307,17 +299,17 @@ pcopy
 ;
 fancy_crc
 
-:crc_count = temp3
+_crc_count = temp3
 CRC_BLOCK_SIZE = 64
 
 		; initialize the count down
-		lda :length
-		sta :crc_count
-		lda :length+1
-		sta :crc_count+1
-		lda :length+2
-		sta :crc_count+2
-		stz :crc_count+3
+		lda pcopy_length
+		sta _crc_count
+		lda pcopy_length+1
+		sta _crc_count+1
+		lda pcopy_length+2
+		sta _crc_count+2
+		stz _crc_count+3
 
 		ldx term_x
 		ldy term_y
@@ -335,16 +327,16 @@ CRC_BLOCK_SIZE = 64
 		sta crc_num+0
 		lda #>CRC_BLOCK_SIZE
 		sta crc_num+1
-		lda #^CRC_BLOCK_SIZE
+		lda #`CRC_BLOCK_SIZE
 		sta crc_num+2
 
-]loop
+_loop
 		; Display length completed
-		lda :crc_count+2
-		ldx :crc_count+3
+		lda _crc_count+2
+		ldx _crc_count+3
 		jsr TermPrintAXH
-		lda :crc_count
-		ldx :crc_count+1
+		lda _crc_count
+		ldx _crc_count+1
 		jsr TermPrintAXH
 		ply
 		plx
@@ -356,86 +348,84 @@ CRC_BLOCK_SIZE = 64
 		; if :crc_count < BLOCK_SIZE
 		;    crc_num = :crc_count
 
-		lda :crc_count+2
+		lda _crc_count+2
 		cmp crc_num+2
-		bcc :less
-		bne :go
+		bcc _less
+		bne _go
 
-		lda :crc_count+1
+		lda _crc_count+1
 		cmp crc_num+1
-		bcc :less
-		bne :go
+		bcc _less
+		bne _go
 
-		lda :crc_count+0
+		lda _crc_count+0
 		cmp crc_num+0
-		bcc :less
-		bne :go
-:less
+		bcc _less
+		bne _go
+_less
 		; last bit, let's go!
-		lda :crc_count+0
+		lda _crc_count+0
 		sta crc_num+0
 
-		lda :crc_count+1
+		lda _crc_count+1
 		sta crc_num+1
 
-		lda :crc_count+2
+		lda _crc_count+2
 		sta crc_num+2
 
-:go
+_go
 ; calc crc
 		jsr calc_crc32
 
 		sec
-		lda :crc_count+0
+		lda _crc_count+0
 		sbc crc_num+0
-		sta :crc_count+0
-		lda :crc_count+1
+		sta _crc_count+0
+		lda _crc_count+1
 		sbc crc_num+1
-		sta :crc_count+1
-		lda :crc_count+2
+		sta _crc_count+1
+		lda _crc_count+2
 		sbc crc_num+2
-		sta :crc_count+2
+		sta _crc_count+2
 
-		ora :crc_count+1
-		ora :crc_count+0
+		ora _crc_count+1
+		ora _crc_count+0
 
-		bne ]loop
+		bne _loop
 
 		ply
 		plx
 
 		rts
 
-txt_look_for_data asc 'Looking for data at $'
-		db 0
-txt_filename      asc '          filename: '
-		db 0
-txt_length        asc '            length: $'
-		db 0
-txt_crc32         asc '             CRC32: $'
-		db 0
-txt_calc32		  asc '  Calculated CRC32: $'
-		db 0
-txt_match		  asc '         CRC Match: '
-		db 0
-txt_create        asc '            Create: '
-		db 0
-txt_write		  asc '             Write: $'
-		db 0
-txt_fail          asc '            Failed: $'
-		db 0
-txt_bad_len       asc ' Invalid Length'
-		db
+txt_look_for_data .text 'Looking for data at $'
+		.byte 0
+txt_filename      .text '          filename: '
+		.byte 0
+txt_length        .text '            length: $'
+		.byte 0
+txt_crc32         .text '             CRC32: $'
+		.byte 0
+txt_calc32		  .text '  Calculated CRC32: $'
+		.byte 0
+txt_match		  .text '         CRC Match: '
+		.byte 0
+txt_create        .text '            Create: '
+		.byte 0
+txt_write		  .text '             Write: $'
+		.byte 0
+txt_fail          .text '            Failed: $'
+		.byte 0
+txt_bad_len       .text ' Invalid Length'
+		.byte 0
 
-txt_Complete      asc ' Copy Completed'
-		db 0
-txt_yes asc 'yes'
-		db 13,0
-txt_no  asc 'no, data corrupt'
-		db 13,0
+txt_Complete      .text ' Copy Completed'
+		.byte 0
+txt_yes .text 'yes'
+		.byte 13,0
+txt_no  .text 'no, data corrupt'
+		.byte 13,0
 
-txt_done db 13
-		asc 'pcopy is done.'
-		db 13,0
-		
-
+txt_done .byte 13
+		.text 'pcopy is done.'
+		.byte 13,0

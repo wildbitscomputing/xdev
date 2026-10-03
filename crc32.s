@@ -1,98 +1,70 @@
 ; Calculating ZIP CRC-32 in 6502
 ; ==============================
-		mx %11
 
-		dum $e0
-crc      ds 4
-crc_num  ds 3
-crc_count ds 3
-		dend
+		.virtual $e0
+crc      .fill 4
+crc_num  .fill 3
+crc_count .fill 3
+		.endv
 
-; Calculate a ZIP 32-bit CRC from data in memory. This code is as
-; tight and as fast as it can be, moving as much code out of inner
-; loops as possible.
+; CRC-32 polynomial $EDB88320, reading through the MMU read window.
+; On entry: crc is the running CRC, crc_num is the nonzero 24-bit byte count.
+; On exit: crc is updated, crc_count equals crc_num, and the read address has
+; advanced by crc_num bytes. Clobbers A, X, and Y.
+; PCopy initializes the running CRC to zero and applies no final XOR; preserve
+; this transfer protocol convention when changing the implementation.
 ;
-; On entry, crc..crc+3   =  incoming CRC
-;           addr..addr+1 => start of data
-;           num..num+1   =  number of bytes
-; On exit,  crc..crc+3   =  updated CRC
-;           addr..addr+1 => end of data+1
-;           num..num+1   =  0
-;
-; Multiple passes over data in memory can be made to update the CRC.
-; For ZIP, initial CRC must be &FFFFFFFF, and the final CRC must
-; be EORed with &FFFFFFFF before being stored in the ZIP file.
-;
-; Extra CRC optimisation by Mike Cook, extra loop optimisation by JGH.
-; Total 63 bytes.
+; Based on the 6502 ZIP CRC routine, with optimizations by Mike Cook and JGH.
 ;
 calc_crc32
 		stz crc_count
 		stz crc_count+1
 		stz crc_count+2
-]bytelp
-		LDX #8                       ; Prepare to rotate CRC 8 bits
-		;LDA (crc_addr-8,x)       ; Fetch byte from memory
+_bytelp
+		ldx #8                       ; Prepare to rotate CRC 8 bits
 		jsr readbyte
 
-; The following code updates the CRC with the byte in A ---------+
-; If used in isolation, requires LDX #8 here                     |
-		EOR crc+0             ; EOR byte into CRC bottom byte    |
-]rotlp                        ;                                  |
-		LSR crc+3             ;                                  | 
-		ROR crc+2             ; Rotate CRC clearing bit 31       |
-		ROR crc+1             ;                                  | 
-		ROR                   ;                                  |
-		BCC :clear            ; b0 was zero                      |
-		TAY                   ; Hold CRC low byte in Y for a bit |
-		LDA crc+3             ;                                  | 
-		EOR #$ED              ;                                  | 
-		STA crc+3             ; CRC=CRC EOR &EDB88320, ZIP polynomic
-		LDA crc+2             ;                                  | 
-		EOR #$B8              ;                                  | 
-		STA crc+2             ;                                  |
-		LDA crc+1             ;                                  | 
-		EOR #$83              ;                                  | 
-		STA crc+1             ;                                  |
-		TYA                   ;                                  | 
-		EOR #$20              ; Get CRC low byte back into A     |
-:clear                        ;                                  |
-		DEX                   ;                                  | 
-		BNE ]rotlp            ; Loop for 8 bits                  |
-; If used in isolation, requires STA crc+0 here                  |
-; ---------------------------------------------------------------+
-;
-;		INC crc_addr
-;		BNE :next
-;		INC crc_addr+1      ; Step to next byte
-;:next
-		STA crc+0           ; Store CRC low byte
-                            ; Now do a 24-bit decrement
-;		LDA crc_num+0
-;		BNE :skip           ; num.lo<>0, not wrapping from 00 to FF
-;		DEC crc_num+1       ; Wrapping from 00 to FF, dec. high byte
-;:skip
-;		DEC crc_num+0
-;		BNE ]bytelp         ; Dec. low byte, loop until num.lo=0
-;		LDA crc_num+1
-;		BNE ]bytelp         ; Loop until num=0
+        ; Update the running CRC with the byte in A.
+        eor crc
+_rotlp
+        lsr crc+3
+        ror crc+2
+        ror crc+1
+        ror a
+        bcc _clear
+        tay
+        lda crc+3
+        eor #$ED
+        sta crc+3
+        lda crc+2
+        eor #$B8
+        sta crc+2
+        lda crc+1
+        eor #$83
+        sta crc+1
+        tya
+        eor #$20
+_clear
+        dex
+        bne _rotlp
+		sta crc+0           ; Store CRC low byte
+; Count bytes processed (24 bits).
 
 		inc crc_count
-		bne :check
+		bne _check
 		inc crc_count+1
-		bne :check
+		bne _check
 		inc crc_count+2
-:check
+_check
 		lda crc_count
 		cmp crc_num
-		bne ]bytelp
+		bne _bytelp
 		lda crc_count+1
 		cmp crc_num+1
-		bne ]bytelp
+		bne _bytelp
 		lda crc_count+2
 		cmp crc_num+2
-		bne ]bytelp
-		RTS
+		bne _bytelp
+		rts
 
 ;------------------------------------------------------------------------------
-
